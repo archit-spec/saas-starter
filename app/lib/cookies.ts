@@ -12,16 +12,16 @@ const COOKIE_OPTIONS = {
 };
 
 export async function setAuthCookie(token: string) {
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   await cookieStore.set(AUTH_COOKIE, token, COOKIE_OPTIONS);
 }
 
 export async function getAuthCookie() {
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   return await cookieStore.get(AUTH_COOKIE)?.value;
 }
 
 export async function removeAuthCookie() {
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   await cookieStore.delete(AUTH_COOKIE);
 }

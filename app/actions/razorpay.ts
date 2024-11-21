@@ -2,7 +2,7 @@
 
 import Razorpay from 'razorpay';
 import { createPaymentRecord, updateUserSubscription } from './firestore';
-import { db } from '../lib/firebase';
+import { adminDb } from '../lib/firebase-admin';
 import { collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
 
 const razorpay = new Razorpay({
@@ -63,16 +63,15 @@ export async function verifyPayment(
 
 async function updatePaymentStatus(orderId: string, status: 'completed' | 'failed') {
   try {
-    const paymentsRef = collection(db, 'payments');
-    const q = query(paymentsRef, where('razorpayOrderId', '==', orderId));
-    const querySnapshot = await getDocs(q);
+    const paymentsRef = adminDb.collection('payments');
+    const querySnapshot = await paymentsRef.where('razorpayOrderId', '==', orderId).get();
     
     if (querySnapshot.empty) {
       throw new Error('Payment record not found');
     }
 
     const paymentDoc = querySnapshot.docs[0];
-    await updateDoc(paymentDoc.ref, {
+    await paymentDoc.ref.update({
       status,
       updatedAt: new Date().toISOString()
     });
@@ -85,22 +84,23 @@ async function updatePaymentStatus(orderId: string, status: 'completed' | 'faile
 }
 
 async function updateUserSubscription(userId: string) {
-  // TO DO: implement user subscription update logic
-  const subscriptionsRef = collection(db, 'subscriptions');
-  const q = query(subscriptionsRef, where('userId', '==', userId));
-  const querySnapshot = await getDocs(q);
+  try {
+    const subscriptionsRef = adminDb.collection('subscriptions');
+    const querySnapshot = await subscriptionsRef.where('userId', '==', userId).get();
 
-  if (querySnapshot.empty) {
-    throw new Error('User document not found');
+    if (querySnapshot.empty) {
+      throw new Error('User document not found');
+    }
+
+    const subscriptionDoc = querySnapshot.docs[0];
+    await subscriptionDoc.ref.update({
+      isPremium: true,
+      updatedAt: new Date().toISOString()
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error updating subscription:', error);
+    throw error;
   }
-
-  const subscriptionDoc = querySnapshot.docs[0];
-  await updateDoc(subscriptionDoc.ref, {
-    isPremium: true,
-    updatedAt: new Date().toISOString()
-  });
-
-  return { success: true };
-  
-  
 }
