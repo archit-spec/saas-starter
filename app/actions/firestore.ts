@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '../lib/firebase';
+import { adminDb } from '../lib/firebase-admin';
 import { 
   collection, 
   doc, 
@@ -15,11 +15,11 @@ import {
 
 export async function initializeFirestoreCollections() {
   try {
-    const batch = writeBatch(db);
+    const batch = adminDb.batch();
 
     // Create users collection with a sample document structure
-    const usersCollectionRef = collection(db, 'users');
-    const sampleUserRef = doc(usersCollectionRef, 'sample_user');
+    const usersCollectionRef = adminDb.collection('users');
+    const sampleUserRef = usersCollectionRef.doc('sample_user');
     batch.set(sampleUserRef, {
       email: '',
       isPremium: false,
@@ -34,8 +34,8 @@ export async function initializeFirestoreCollections() {
     });
 
     // Create subscriptions collection with plan details
-    const subscriptionsCollectionRef = collection(db, 'subscriptions');
-    const plansRef = doc(subscriptionsCollectionRef, 'plans');
+    const subscriptionsCollectionRef = adminDb.collection('subscriptions');
+    const plansRef = subscriptionsCollectionRef.doc('plans');
     batch.set(plansRef, {
       basic: {
         name: 'Basic',
@@ -61,8 +61,8 @@ export async function initializeFirestoreCollections() {
     });
 
     // Create payments collection structure
-    const paymentsCollectionRef = collection(db, 'payments');
-    const samplePaymentRef = doc(paymentsCollectionRef, 'sample_payment');
+    const paymentsCollectionRef = adminDb.collection('payments');
+    const samplePaymentRef = paymentsCollectionRef.doc('sample_payment');
     batch.set(samplePaymentRef, {
       userId: '',
       amount: 0,
@@ -86,11 +86,11 @@ export async function initializeFirestoreCollections() {
 
 export async function createUserDocument(userId: string, email: string) {
   try {
-    const userRef = doc(db, 'users', userId);
-    const userDoc = await getDoc(userRef);
+    const userRef = adminDb.collection('users').doc(userId);
+    const userDoc = await userRef.get();
 
     if (!userDoc.exists()) {
-      await setDoc(userRef, {
+      await userRef.set({
         email,
         isPremium: false,
         createdAt: new Date().toISOString(),
@@ -111,30 +111,42 @@ export async function createUserDocument(userId: string, email: string) {
   }
 }
 
-export async function createPaymentRecord(
-  userId: string,
-  orderId: string,
-  amount: number
-) {
-  if (!userId || !orderId || !amount) {
-    throw new Error('Missing required fields for payment record');
-  }
-
+export async function createPaymentRecord(userId: string, orderId: string, amount: number) {
   try {
-    const paymentRef = doc(collection(db, 'payments'));
-    await setDoc(paymentRef, {
-      userId: userId,
-      amount: Number(amount),
-      currency: 'INR',
+    const paymentRef = adminDb.collection('payments').doc();
+    await paymentRef.set({
+      userId,
+      orderId,
+      amount,
       status: 'pending',
-      razorpayOrderId: orderId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
-
-    return { success: true, paymentId: paymentRef.id };
+    return paymentRef.id;
   } catch (error) {
     console.error('Error creating payment record:', error);
+    throw error;
+  }
+}
+
+export async function updatePaymentStatus(orderId: string, status: 'completed' | 'failed') {
+  try {
+    const paymentsRef = adminDb.collection('payments');
+    const querySnapshot = await paymentsRef.where('orderId', '==', orderId).get();
+    
+    if (querySnapshot.empty) {
+      throw new Error('Payment record not found');
+    }
+
+    const paymentDoc = querySnapshot.docs[0];
+    await paymentDoc.ref.update({
+      status,
+      updatedAt: new Date().toISOString()
+    });
+
+    return paymentDoc.id;
+  } catch (error) {
+    console.error('Error updating payment status:', error);
     throw error;
   }
 }
@@ -146,8 +158,8 @@ export async function updateUserSubscription(userId: string) {
 
   try {
     // First get the current user data
-    const userRef = doc(db, 'users', userId);
-    const userSnap = await getDoc(userRef);
+    const userRef = adminDb.collection('users').doc(userId);
+    const userSnap = await userRef.get();
     
     if (!userSnap.exists()) {
       throw new Error('User document not found');
@@ -158,7 +170,7 @@ export async function updateUserSubscription(userId: string) {
     const oneYearFromNow = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
 
     // Update user document while preserving existing fields
-    await setDoc(userRef, {
+    await userRef.set({
       ...currentData,
       email: currentData.email,
       createdAt: currentData.createdAt, // Preserve original creation date
