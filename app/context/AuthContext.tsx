@@ -1,4 +1,3 @@
-// app/context/AuthContext.tsx
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
@@ -11,6 +10,8 @@ import {
 import { auth, googleProvider } from '../lib/firebase';
 import { createUserDocument } from '../actions/firestore';
 import { setAuthCookie, removeAuthCookie } from '../lib/cookies';
+import { toast } from 'sonner';
+import { useRouter } from 'next/navigation';
 
 interface AuthContextType {
   user: User | null;
@@ -29,43 +30,51 @@ const AuthContext = createContext<AuthContextType>({
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       try {
         if (user) {
           setUser(user);
-          // Get the ID token and set it in the cookie
-          const token = await user.getIdToken();
-          await setAuthCookie(token);
+          // Create or update user document in Firestore
+          if (user.email) {
+            try {
+              await createUserDocument(user.uid, user.email);
+              // Get the ID token and set it in the cookie
+              const token = await user.getIdToken();
+              await setAuthCookie(token);
+              router.push('/dashboard');
+            } catch (error) {
+              console.error('Error creating user document:', error);
+              toast.error('Error updating user information');
+            }
+          }
         } else {
           setUser(null);
           await removeAuthCookie();
+          router.push('/auth/login');
         }
       } catch (error) {
         console.error('Error handling auth state change:', error);
+        toast.error('Authentication error occurred');
       } finally {
         setLoading(false);
       }
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [router]);
 
   const signInWithGoogle = async () => {
     try {
       const result = await signInWithPopup(auth, googleProvider);
-      const { user } = result;
-      
-      // Create or update user document in Firestore
-      await createUserDocument(user.uid, user.email || '');
-      
-      // Set auth cookie
-      const token = await user.getIdToken();
-      await setAuthCookie(token);
+      if (result.user) {
+        toast.success('Successfully signed in!');
+      }
     } catch (error) {
       console.error('Error signing in with Google:', error);
-      throw error;
+      toast.error('Failed to sign in with Google');
     }
   };
 
@@ -73,9 +82,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       await firebaseSignOut(auth);
       await removeAuthCookie();
+      toast.success('Successfully signed out!');
+      router.push('/auth/login');
     } catch (error) {
       console.error('Error signing out:', error);
-      throw error;
+      toast.error('Failed to sign out');
     }
   };
 

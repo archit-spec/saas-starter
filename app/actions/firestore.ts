@@ -1,96 +1,19 @@
 'use server';
 
-import { adminDb } from '../lib/firebase-admin';
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  writeBatch,
-  query,
-  where,
-  getDocs,
-  updateDoc
-} from 'firebase/firestore';
-
-export async function initializeFirestoreCollections() {
-  try {
-    const batch = adminDb.batch();
-
-    // Create users collection with a sample document structure
-    const usersCollectionRef = adminDb.collection('users');
-    const sampleUserRef = usersCollectionRef.doc('sample_user');
-    batch.set(sampleUserRef, {
-      email: '',
-      isPremium: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      subscriptionDetails: {
-        plan: 'free',
-        startDate: null,
-        endDate: null,
-        status: 'inactive'
-      }
-    });
-
-    // Create subscriptions collection with plan details
-    const subscriptionsCollectionRef = adminDb.collection('subscriptions');
-    const plansRef = subscriptionsCollectionRef.doc('plans');
-    batch.set(plansRef, {
-      basic: {
-        name: 'Basic',
-        price: 0,
-        features: [
-          'Basic analytics',
-          '5 analyses per month',
-          'Standard support'
-        ]
-      },
-      premium: {
-        name: 'Premium',
-        price: 999,
-        features: [
-          'Advanced analytics',
-          'Unlimited analyses',
-          'Priority support',
-          'Custom report generation',
-          'Real-time data processing',
-          'Export functionality'
-        ]
-      }
-    });
-
-    // Create payments collection structure
-    const paymentsCollectionRef = adminDb.collection('payments');
-    const samplePaymentRef = paymentsCollectionRef.doc('sample_payment');
-    batch.set(samplePaymentRef, {
-      userId: '',
-      amount: 0,
-      currency: 'INR',
-      status: 'pending',
-      razorpayOrderId: '',
-      razorpayPaymentId: '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
-
-    // Commit all the batch operations
-    await batch.commit();
-
-    return { success: true, message: 'Firestore collections initialized successfully' };
-  } catch (error) {
-    console.error('Error initializing Firestore collections:', error);
-    throw error;
-  }
-}
+import { getAdminDb } from '../lib/firebase-admin';
 
 export async function createUserDocument(userId: string, email: string) {
-  try {
-    const userRef = adminDb.collection('users').doc(userId);
-    const userDoc = await userRef.get();
+  if (!userId || !email) {
+    throw new Error('User ID and email are required to create user document');
+  }
 
-    if (!userDoc.exists()) {
-      await userRef.set({
+  try {
+    const adminDb = await getAdminDb();
+    const userRef = adminDb.collection('users').doc(userId);
+    const userSnap = await userRef.get();
+
+    if (!userSnap.exists) {
+      const userData = {
         email,
         isPremium: false,
         createdAt: new Date().toISOString(),
@@ -101,92 +24,90 @@ export async function createUserDocument(userId: string, email: string) {
           endDate: null,
           status: 'inactive'
         }
-      });
+      };
+
+      await userRef.set(userData);
+      return { success: true, message: 'User document created successfully' };
     }
 
-    return { success: true };
+    // Update existing user
+    await userRef.update({
+      email,
+      updatedAt: new Date().toISOString()
+    });
+
+    return { success: true, message: 'User document updated successfully' };
   } catch (error) {
-    console.error('Error creating user document:', error);
-    throw error;
+    console.error('Error creating/updating user document:', error);
+    throw new Error('Failed to process user data: ' + error.message);
   }
 }
 
 export async function createPaymentRecord(userId: string, orderId: string, amount: number) {
   try {
-    const paymentRef = adminDb.collection('payments').doc();
+    const adminDb = await getAdminDb();
+    const paymentRef = adminDb.collection('payments').doc(orderId);
+    
     await paymentRef.set({
       userId,
-      orderId,
       amount,
+      currency: 'INR',
       status: 'pending',
+      razorpayOrderId: orderId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
-    return paymentRef.id;
+
+    return { success: true };
   } catch (error) {
     console.error('Error creating payment record:', error);
-    throw error;
+    throw new Error('Failed to create payment record');
   }
 }
 
 export async function updatePaymentStatus(orderId: string, status: 'completed' | 'failed') {
   try {
-    const paymentsRef = adminDb.collection('payments');
-    const querySnapshot = await paymentsRef.where('orderId', '==', orderId).get();
+    const adminDb = await getAdminDb();
+    const paymentRef = adminDb.collection('payments').doc(orderId);
     
-    if (querySnapshot.empty) {
-      throw new Error('Payment record not found');
-    }
-
-    const paymentDoc = querySnapshot.docs[0];
-    await paymentDoc.ref.update({
+    await paymentRef.update({
       status,
       updatedAt: new Date().toISOString()
     });
 
-    return paymentDoc.id;
+    return { success: true };
   } catch (error) {
     console.error('Error updating payment status:', error);
-    throw error;
+    throw new Error('Failed to update payment status');
   }
 }
 
 export async function updateUserSubscription(userId: string) {
-  if (!userId) {
-    throw new Error('User ID is required to update subscription');
-  }
-
   try {
-    // First get the current user data
+    const adminDb = await getAdminDb();
     const userRef = adminDb.collection('users').doc(userId);
-    const userSnap = await userRef.get();
-    
-    if (!userSnap.exists()) {
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
       throw new Error('User document not found');
     }
 
-    const currentData = userSnap.data();
-    const now = new Date().toISOString();
-    const oneYearFromNow = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const currentDate = new Date();
+    const endDate = new Date();
+    endDate.setMonth(endDate.getMonth() + 1); // 1 month subscription
 
-    // Update user document while preserving existing fields
-    await userRef.set({
-      ...currentData,
-      email: currentData.email,
-      createdAt: currentData.createdAt, // Preserve original creation date
+    await userRef.update({
       isPremium: true,
-      updatedAt: now,
-      subscriptionDetails: {
-        plan: 'premium',
-        startDate: now,
-        endDate: oneYearFromNow,
-        status: 'active'
-      }
+      'subscriptionDetails.plan': 'premium',
+      'subscriptionDetails.startDate': currentDate.toISOString(),
+      'subscriptionDetails.endDate': endDate.toISOString(),
+      'subscriptionDetails.status': 'active',
+      updatedAt: currentDate.toISOString()
     });
 
     return { success: true };
   } catch (error) {
     console.error('Error updating user subscription:', error);
-    throw error;
+    throw new Error('Failed to update user subscription');
   }
 }
